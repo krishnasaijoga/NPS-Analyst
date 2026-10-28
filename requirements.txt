@@ -1,0 +1,11 @@
+# NPS analyst in a box — install with:  pip install -r requirements.txt   (Python 3.11–3.13)
+openai-agents>=0.4        # the OpenAI Agents SDK (Agent, Runner, function_tool, .as_tool) — brings openai + pydantic
+pandas>=2.2               # every number: NPS, segments, revenue at risk
+python-dotenv>=1.0        # reads OPENAI_API_KEY from .env
+strands-agents[openai]>=1.60.0,<2.0.0
+strands-agents-tools>=0.8.9,<0.9.0
+pandas>=2.0.0
+boto3>=1.40.0
+python-dotenv>=1.0.0
+pytest>=9.1.1
+ruff>=0.16.7
