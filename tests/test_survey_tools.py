@@ -8,7 +8,7 @@ from nps_insights_agent.tools.survey_tools import get_nps_overview
 
 # Access the underlying Python function
 # without invoking the Strands tool interface.
-get_overview = get_nps_overview.__wrapped__
+get_overview = get_nps_overview.__wrapped__ # type: ignore
 
 
 @pytest.fixture
