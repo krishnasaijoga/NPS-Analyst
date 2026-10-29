@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 from unittest.mock import patch
 
-from nps_insights_agent.tools.survey_tools import get_nps_overview
+from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment
 
 
 # Access the underlying Python function
@@ -163,3 +163,268 @@ def test_single_response():
     assert result["total_responses"] == 1
     assert result["overall_nps"] == 100.0
     assert result["margin_of_error_95"] is None
+
+
+
+# =====================================================
+# Tests for get_nps_by_segment
+# =====================================================
+
+get_segments = get_nps_by_segment.__wrapped__ # type: ignore
+
+
+@pytest.fixture
+def mock_segment_data():
+    """Sample dataset with product, channel and tenure."""
+
+    return pd.DataFrame([
+        # Savings Account: 2 promoters, 1 passive, 1 detractor
+        {
+            "response_id": "R001",
+            "month": "2026-07",
+            "product": "Savings Account",
+            "channel": "Mobile App",
+            "tenure": "3+ yrs",
+            "score": 10
+        },
+        {
+            "response_id": "R002",
+            "month": "2026-07",
+            "product": "Savings Account",
+            "channel": "Branch",
+            "tenure": "1-3 yrs",
+            "score": 9
+        },
+        {
+            "response_id": "R003",
+            "month": "2026-08",
+            "product": "Savings Account",
+            "channel": "Mobile App",
+            "tenure": "3+ yrs",
+            "score": 8
+        },
+        {
+            "response_id": "R004",
+            "month": "2026-08",
+            "product": "Savings Account",
+            "channel": "Branch",
+            "tenure": "1-3 yrs",
+            "score": 4
+        },
+
+        # Credit Card: 1 promoter, 1 passive, 2 detractors
+        {
+            "response_id": "R005",
+            "month": "2026-07",
+            "product": "Credit Card",
+            "channel": "Mobile App",
+            "tenure": "<1 yr",
+            "score": 9
+        },
+        {
+            "response_id": "R006",
+            "month": "2026-07",
+            "product": "Credit Card",
+            "channel": "Call Centre",
+            "tenure": "<1 yr",
+            "score": 7
+        },
+        {
+            "response_id": "R007",
+            "month": "2026-08",
+            "product": "Credit Card",
+            "channel": "Call Centre",
+            "tenure": "1-3 yrs",
+            "score": 3
+        },
+        {
+            "response_id": "R008",
+            "month": "2026-08",
+            "product": "Credit Card",
+            "channel": "Mobile App",
+            "tenure": "3+ yrs",
+            "score": 2
+        },
+    ])
+
+
+@pytest.fixture
+def mock_segment_loader(mock_segment_data):
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=mock_segment_data
+    ):
+        yield
+
+
+def test_segment_by_product(mock_segment_loader):
+    result = get_segments(segment="product")
+
+    segments = {
+        item["segment_name"]: item
+        for item in result["segments"]
+    }
+
+    assert result["data_status"] is True
+    assert result["segment_dimension"] == "product"
+    assert len(segments) == 2
+
+    savings = segments["Savings Account"]
+
+    assert savings["total_responses"] == 4
+    assert savings["promoters"] == 2
+    assert savings["passives"] == 1
+    assert savings["detractors"] == 1
+    assert savings["nps"] == 25.0
+
+    credit = segments["Credit Card"]
+
+    assert credit["total_responses"] == 4
+    assert credit["promoters"] == 1
+    assert credit["passives"] == 1
+    assert credit["detractors"] == 2
+    assert credit["nps"] == -25.0
+
+
+def test_segment_by_channel(mock_segment_loader):
+    result = get_segments(segment="channel")
+
+    segments = {
+        item["segment_name"]: item
+        for item in result["segments"]
+    }
+
+    assert len(segments) == 3
+
+    assert segments["Mobile App"]["nps"] == 25.0
+    assert segments["Branch"]["nps"] == 0.0
+    assert segments["Call Centre"]["nps"] == -50.0
+
+
+def test_segment_by_tenure(mock_segment_loader):
+    result = get_segments(segment="tenure")
+
+    segments = {
+        item["segment_name"]: item
+        for item in result["segments"]
+    }
+
+    assert len(segments) == 3
+
+    assert segments["3+ yrs"]["nps"] == 0.0
+    assert segments["1-3 yrs"]["nps"] == -33.33
+    assert segments["<1 yr"]["nps"] == 50.0
+
+
+def test_filter_by_month(mock_segment_loader):
+    result = get_segments(
+        segment="product",
+        month="2026-07"
+    )
+
+    segments = {
+        item["segment_name"]: item
+        for item in result["segments"]
+    }
+
+    assert result["month"] == "2026-07"
+
+    assert segments["Savings Account"]["nps"] == 100.0
+    assert segments["Credit Card"]["nps"] == 50.0
+
+    assert segments["Savings Account"]["total_responses"] == 2
+    assert segments["Credit Card"]["total_responses"] == 2
+
+
+def test_month_optional(mock_segment_loader):
+    result = get_segments(segment="product")
+
+    assert result["month"] is None
+    assert result["data_status"] is True
+
+
+def test_case_insensitive_segment(mock_segment_loader):
+    result = get_segments(segment=" PRODUCT ")
+
+    assert result["segment_dimension"] == "product"
+
+
+def test_invalid_segment(mock_segment_loader):
+    with pytest.raises(ValueError):
+        get_segments(segment="region")
+
+
+def test_invalid_month(mock_segment_loader):
+    with pytest.raises(ValueError):
+        get_segments(
+            segment="product",
+            month="2026-12"
+        )
+
+
+def test_low_sample_flag(mock_segment_loader):
+    result = get_segments(segment="product")
+
+    for item in result["segments"]:
+        assert item["low_sample"] is True
+
+
+def test_segment_margin_of_error(mock_segment_loader):
+    result = get_segments(segment="product")
+
+    segments = {
+        item["segment_name"]: item
+        for item in result["segments"]
+    }
+
+    # Savings NPS values: [1, 1, 0, -1]
+    # Credit NPS values:  [1, 0, -1, -1]
+    # Both have the same sample standard deviation.
+
+    assert segments["Savings Account"]["moe"] == pytest.approx(
+        93.83, abs=0.02
+    )
+
+    assert segments["Credit Card"]["moe"] == pytest.approx(
+        93.83, abs=0.02
+    )
+
+
+def test_segment_output_types(mock_segment_loader):
+    result = get_segments(segment="product")
+
+    for item in result["segments"]:
+        assert isinstance(item["segment_name"], str)
+        assert isinstance(item["total_responses"], int)
+        assert isinstance(item["promoters"], int)
+        assert isinstance(item["passives"], int)
+        assert isinstance(item["detractors"], int)
+        assert isinstance(item["nps"], float)
+        assert isinstance(item["moe"], float)
+        assert isinstance(item["low_sample"], bool)
+
+
+def test_single_response_segment():
+    df = pd.DataFrame([
+        {
+            "response_id": "R001",
+            "month": "2026-07",
+            "product": "Wealth",
+            "channel": "Branch",
+            "tenure": "3+ yrs",
+            "score": 10
+        }
+    ])
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=df
+    ):
+        result = get_segments(segment="product")
+
+    wealth = result["segments"][0]
+
+    assert wealth["total_responses"] == 1
+    assert wealth["nps"] == 100.0
+    assert wealth["moe"] is None
+    assert wealth["low_sample"] is True
