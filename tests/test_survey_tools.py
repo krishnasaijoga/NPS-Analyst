@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 from unittest.mock import patch
 
-from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment
+from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment, get_revenue_at_risk, get_callback_list
 
 
 # Access the underlying Python function
@@ -428,3 +428,541 @@ def test_single_response_segment():
     assert wealth["nps"] == 100.0
     assert wealth["moe"] is None
     assert wealth["low_sample"] is True
+
+
+
+
+# =====================================================
+# Tests for get_revenue_at_risk
+# =====================================================
+
+get_risk = get_revenue_at_risk.__wrapped__ # type: ignore
+
+
+@pytest.fixture
+def mock_revenue_data():
+    return pd.DataFrame([
+        {
+            "response_id": "R001",
+            "score": 10,
+            "annual_revenue_inr": 10000,
+            "product": "Savings Account",
+            "channel": "Mobile App",
+            "tenure": "3+ yrs"
+        },
+        {
+            "response_id": "R002",
+            "score": 8,
+            "annual_revenue_inr": 20000,
+            "product": "Savings Account",
+            "channel": "Branch",
+            "tenure": "1-3 yrs"
+        },
+        {
+            "response_id": "R003",
+            "score": 4,
+            "annual_revenue_inr": 30000,
+            "product": "Savings Account",
+            "channel": "Mobile App",
+            "tenure": "<1 yr"
+        },
+        {
+            "response_id": "R004",
+            "score": 9,
+            "annual_revenue_inr": 40000,
+            "product": "Credit Card",
+            "channel": "Branch",
+            "tenure": "<1 yr"
+        },
+        {
+            "response_id": "R005",
+            "score": 7,
+            "annual_revenue_inr": 50000,
+            "product": "Credit Card",
+            "channel": "Call Centre",
+            "tenure": "1-3 yrs"
+        },
+        {
+            "response_id": "R006",
+            "score": 2,
+            "annual_revenue_inr": 60000,
+            "product": "Wealth",
+            "channel": "Mobile App",
+            "tenure": "3+ yrs"
+        }
+    ])
+
+
+@pytest.fixture
+def mock_revenue_loader(mock_revenue_data):
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=mock_revenue_data
+    ):
+        yield
+
+
+def test_revenue_data_status(mock_revenue_loader):
+    result = get_risk()
+
+    assert result["data_status"] is True
+    assert result["total_responses"] == 6
+    assert result["currency"] == "INR"
+    assert result["unit"] == "rupees"
+
+
+def test_churn_assumptions(mock_revenue_loader):
+    result = get_risk()
+
+    assert result["churn_assumptions"] == {
+        "promoter": 0.03,
+        "passive": 0.10,
+        "detractor": 0.25
+    }
+
+
+def test_overall_revenue_at_risk(mock_revenue_loader):
+    result = get_risk()
+
+    # Total annual revenue = 210000
+    # Risk = 300 + 2000 + 7500 + 1200 + 5000 + 15000
+    #      = 31000
+
+    assert result["overall"]["annual_revenue"] == 210000
+    assert result["overall"]["revenue_at_risk"] == 31000
+    assert result["overall"]["risk_percentage"] == 14.76
+
+
+def test_revenue_by_nps_category(mock_revenue_loader):
+    result = get_risk()
+
+    categories = {
+        item["category"]: item
+        for item in result["by_nps_category"]
+    }
+
+    assert categories["promoter"]["annual_revenue"] == 50000
+    assert categories["promoter"]["revenue_at_risk"] == 1500
+
+    assert categories["passive"]["annual_revenue"] == 70000
+    assert categories["passive"]["revenue_at_risk"] == 7000
+
+    assert categories["detractor"]["annual_revenue"] == 90000
+    assert categories["detractor"]["revenue_at_risk"] == 22500
+
+
+def test_revenue_by_product(mock_revenue_loader):
+    result = get_risk()
+
+    products = {
+        item["category"]: item
+        for item in result["by_product"]
+    }
+
+    assert len(products) == 3
+
+    assert products["Savings Account"]["annual_revenue"] == 60000
+    assert products["Savings Account"]["revenue_at_risk"] == 9800
+    assert products["Savings Account"]["customers"] == 3
+
+    assert products["Credit Card"]["annual_revenue"] == 90000
+    assert products["Credit Card"]["revenue_at_risk"] == 6200
+    assert products["Credit Card"]["customers"] == 2
+
+    assert products["Wealth"]["annual_revenue"] == 60000
+    assert products["Wealth"]["revenue_at_risk"] == 15000
+    assert products["Wealth"]["customers"] == 1
+
+
+def test_revenue_by_channel(mock_revenue_loader):
+    result = get_risk()
+
+    channels = {
+        item["category"]: item
+        for item in result["by_channel"]
+    }
+
+    assert len(channels) == 3
+
+    assert channels["Mobile App"]["revenue_at_risk"] == 22800
+    assert channels["Branch"]["revenue_at_risk"] == 3200
+    assert channels["Call Centre"]["revenue_at_risk"] == 5000
+
+
+def test_revenue_by_tenure(mock_revenue_loader):
+    result = get_risk()
+
+    tenures = {
+        item["category"]: item
+        for item in result["by_tenure"]
+    }
+
+    assert len(tenures) == 3
+
+    assert tenures["<1 yr"]["revenue_at_risk"] == 8700
+    assert tenures["1-3 yrs"]["revenue_at_risk"] == 7000
+    assert tenures["3+ yrs"]["revenue_at_risk"] == 15300
+
+
+def test_group_risk_percentages(mock_revenue_loader):
+    result = get_risk()
+
+    for group_name in [
+        "by_product",
+        "by_channel",
+        "by_tenure",
+        "by_nps_category"
+    ]:
+        for group in result[group_name]:
+            expected = (
+                group["revenue_at_risk"] * 100
+                / group["annual_revenue"]
+                if group["annual_revenue"] > 0 else 0.0
+            )
+
+            assert group["risk_percentage"] == pytest.approx(
+                expected, abs=0.01
+            )
+
+
+def test_breakdown_totals_match_overall(mock_revenue_loader):
+    result = get_risk()
+
+    overall_revenue = result["overall"]["annual_revenue"]
+    overall_risk = result["overall"]["revenue_at_risk"]
+
+    for group_name in [
+        "by_product",
+        "by_channel",
+        "by_tenure",
+        "by_nps_category"
+    ]:
+        total_revenue = sum(
+            item["annual_revenue"] for item in result[group_name]
+        )
+
+        total_risk = sum(
+            item["revenue_at_risk"] for item in result[group_name]
+        )
+
+        assert total_revenue == pytest.approx(
+            overall_revenue, abs=0.01
+        )
+        assert total_risk == pytest.approx(
+            overall_risk, abs=0.01
+        )
+
+
+def test_zero_revenue():
+    df = pd.DataFrame([
+        {
+            "response_id": "R001",
+            "score": 3,
+            "annual_revenue_inr": 0,
+            "product": "Savings Account",
+            "channel": "Branch",
+            "tenure": "<1 yr"
+        }
+    ])
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=df
+    ):
+        result = get_risk()
+
+    assert result["overall"]["annual_revenue"] == 0
+    assert result["overall"]["revenue_at_risk"] == 0
+    assert result["overall"]["risk_percentage"] == 0.0
+
+    assert result["by_product"][0]["risk_percentage"] == 0.0
+
+
+def test_empty_revenue_dataset():
+    empty_df = pd.DataFrame()
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=empty_df
+    ):
+        result = get_risk()
+
+    assert result["data_status"] is False
+    assert result["total_responses"] == 0
+    assert result["currency"] == "INR"
+    assert result["unit"] == "rupees"
+
+
+def test_original_dataframe_unchanged(mock_revenue_data):
+    original = mock_revenue_data.copy(deep=True)
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=mock_revenue_data
+    ):
+        get_risk()
+
+    pd.testing.assert_frame_equal(mock_revenue_data, original)
+
+
+def test_revenue_output_structure(mock_revenue_loader):
+    result = get_risk()
+
+    expected_keys = {
+        "data_status",
+        "total_responses",
+        "currency",
+        "unit",
+        "overall",
+        "churn_assumptions",
+        "by_nps_category",
+        "by_product",
+        "by_channel",
+        "by_tenure",
+        "data_caveats"
+    }
+
+    assert expected_keys.issubset(result.keys())
+
+    assert isinstance(result["overall"], dict)
+    assert isinstance(result["by_product"], list)
+    assert isinstance(result["by_channel"], list)
+    assert isinstance(result["by_tenure"], list)
+    assert isinstance(result["by_nps_category"], list)
+    assert isinstance(result["data_caveats"], list)
+
+
+
+# =====================================================
+# Tests for get_callback_list
+# =====================================================
+
+get_callbacks = get_callback_list.__wrapped__ # type: ignore
+
+
+@pytest.fixture
+def mock_callback_data():
+    return pd.DataFrame([
+        {
+            "response_id": "R001",
+            "score": 2,
+            "annual_revenue_inr": 300000,
+            "product": "Wealth",
+            "comment": "Unexpected advisory fees"
+        },
+        {
+            "response_id": "R002",
+            "score": 4,
+            "annual_revenue_inr": 15000,
+            "product": "Savings Account",
+            "comment": "OTP not working"
+        },
+        {
+            "response_id": "R003",
+            "score": 6,
+            "annual_revenue_inr": 8000,
+            "product": "Credit Card",
+            "comment": "Long customer support wait"
+        },
+        {
+            "response_id": "R004",
+            "score": 9,
+            "annual_revenue_inr": 200000,
+            "product": "Wealth",
+            "comment": "Excellent service"
+        },
+        {
+            "response_id": "R005",
+            "score": 1,
+            "annual_revenue_inr": 75000,
+            "product": "Savings Account",
+            "comment": "Unable to access account"
+        },
+        {
+            "response_id": "R006",
+            "score": 8,
+            "annual_revenue_inr": 500000,
+            "product": "Wealth",
+            "comment": "Good experience"
+        }
+    ])
+
+
+@pytest.fixture
+def mock_callback_loader(mock_callback_data):
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=mock_callback_data
+    ):
+        yield
+
+
+def test_callback_data_status(mock_callback_loader):
+    result = get_callbacks()
+
+    assert result["data_status"] is True
+    assert result["total_candidates"] == 4
+    assert result["returned_candidates"] == 4
+
+
+def test_only_detractors_in_callback_list(mock_callback_loader):
+    result = get_callbacks()
+
+    for customer in result["callback_list"]:
+        assert 0 <= customer["nps_score"] <= 6
+
+    returned_ids = {
+        customer["response_id"]
+        for customer in result["callback_list"]
+    }
+
+    # Promoter and passive must be excluded
+    assert "R004" not in returned_ids
+    assert "R006" not in returned_ids
+
+
+def test_callback_revenue_at_risk(mock_callback_loader):
+    result = get_callbacks()
+
+    customers = {
+        customer["response_id"]: customer
+        for customer in result["callback_list"]
+    }
+
+    # Detractors have an assumed churn probability of 25%
+
+    assert customers["R001"]["revenue_at_risk_inr"] == 75000
+    assert customers["R002"]["revenue_at_risk_inr"] == 3750
+    assert customers["R003"]["revenue_at_risk_inr"] == 2000
+    assert customers["R005"]["revenue_at_risk_inr"] == 18750
+
+
+def test_callback_ranking(mock_callback_loader):
+    result = get_callbacks()
+
+    returned_ids = [
+        customer["response_id"]
+        for customer in result["callback_list"]
+    ]
+
+    assert returned_ids == [
+        "R001",
+        "R005",
+        "R002",
+        "R003"
+    ]
+
+
+def test_priority_numbers(mock_callback_loader):
+    result = get_callbacks()
+
+    priorities = [
+        customer["priority"]
+        for customer in result["callback_list"]
+    ]
+
+    assert priorities == [1, 2, 3, 4]
+
+
+def test_top_n_limit(mock_callback_loader):
+    result = get_callbacks(top_n=2)
+
+    assert result["total_candidates"] == 4
+    assert result["returned_candidates"] == 2
+    assert len(result["callback_list"]) == 2
+
+    assert result["callback_list"][0]["response_id"] == "R001"
+    assert result["callback_list"][1]["response_id"] == "R005"
+
+
+def test_top_n_greater_than_candidates(mock_callback_loader):
+    result = get_callbacks(top_n=100)
+
+    assert result["total_candidates"] == 4
+    assert result["returned_candidates"] == 4
+    assert len(result["callback_list"]) == 4
+
+
+@pytest.mark.parametrize("top_n", [0, -1, -10])
+def test_invalid_top_n(mock_callback_loader, top_n):
+    with pytest.raises(ValueError):
+        get_callbacks(top_n=top_n)
+
+
+def test_no_detractors():
+    df = pd.DataFrame([
+        {
+            "response_id": "R001",
+            "score": 10,
+            "annual_revenue_inr": 100000,
+            "product": "Wealth",
+            "comment": "Excellent"
+        },
+        {
+            "response_id": "R002",
+            "score": 8,
+            "annual_revenue_inr": 20000,
+            "product": "Savings Account",
+            "comment": "Good"
+        }
+    ])
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=df
+    ):
+        result = get_callbacks()
+
+    assert result["data_status"] is True
+    assert result["total_candidates"] == 0
+    assert result["returned_candidates"] == 0
+    assert result["callback_list"] == []
+
+
+def test_empty_callback_dataset():
+    empty_df = pd.DataFrame()
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=empty_df
+    ):
+        result = get_callbacks()
+
+    assert result["data_status"] is False
+    assert result["total_responses"] == 0
+
+
+def test_callback_output_structure(mock_callback_loader):
+    result = get_callbacks()
+
+    expected_keys = {
+        "response_id",
+        "nps_score",
+        "product",
+        "annual_revenue_inr",
+        "revenue_at_risk_inr",
+        "comment",
+        "priority"
+    }
+
+    for customer in result["callback_list"]:
+        assert expected_keys.issubset(customer.keys())
+
+        assert isinstance(customer["response_id"], str)
+        assert isinstance(customer["nps_score"], int)
+        assert isinstance(customer["product"], str)
+        assert isinstance(customer["annual_revenue_inr"], int)
+        assert isinstance(customer["revenue_at_risk_inr"], float)
+        assert isinstance(customer["priority"], int)
+
+
+def test_original_callback_dataframe_unchanged(mock_callback_data):
+    original = mock_callback_data.copy(deep=True)
+
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=mock_callback_data
+    ):
+        get_callbacks()
+
+    pd.testing.assert_frame_equal(mock_callback_data, original)

@@ -1,9 +1,16 @@
+from typing import cast
 from strands import tool
 
 from nps_insights_agent.data_loader import load_survey_data
 
 import numpy as np
 import pandas as pd
+
+CHURN_PROBABILITIES={
+        "promoter":0.03,
+        "passive":0.1,
+        "detractor":0.25
+    }
 
 
 @tool
@@ -143,13 +150,190 @@ def get_nps_by_segment(segment:str,month:str|None=None)->dict:
 
 
 @tool
-def get_revenue_at_risk():
-    pass
+def get_revenue_at_risk()->dict:
+    """
+    Calculate estimated annual revenue at risk using predefined
+    churn probabilities for promoters, passives, and detractors.
+
+    Args:
+        Doesn't take any inputs
+
+    Returns:
+        Dictionary containing overall financial exposure and
+        breakdowns by NPS category, product, channel, and tenure.
+        All monetary values are expressed in INR rupees.
+    """
+    df=load_survey_data().copy()
+    if len(df)<=0:
+        return {
+            "data_status":False,
+            "total_responses":0,
+            "currency":"INR",
+            "unit":"rupees",
+        }
+
+    df["nps_class"]=np.where(
+        df["score"]>=9,
+        "promoter",
+        np.where(df["score"]<=6,"detractor","passive")
+    )
+
+    df["revenue_at_risk"]=df["annual_revenue_inr"]*df["nps_class"].map(CHURN_PROBABILITIES)
+    total_revenue=df["annual_revenue_inr"].sum()
+    total_revenue_at_risk=df["revenue_at_risk"].sum()
+    total_risk_percentage=round(total_revenue_at_risk*100/total_revenue,2) if total_revenue!=0 else 0.0
+    total_responses=len(df)
+
+    df_by_product=df.groupby("product").agg(
+        customers=("response_id","size"),
+        annual_revenue=("annual_revenue_inr","sum"),
+        revenue_at_risk=("revenue_at_risk","sum")
+    )
+    df_by_product["risk_percentage"]=np.where(
+        df_by_product["annual_revenue"]>0,
+        df_by_product["revenue_at_risk"]*100/df_by_product["annual_revenue"].replace(0,np.nan),
+        0.0
+    )
+
+    df_by_channel=df.groupby("channel").agg(
+        annual_revenue=("annual_revenue_inr","sum"),
+        revenue_at_risk=("revenue_at_risk","sum")
+    )
+    df_by_channel["risk_percentage"]=np.where(
+        df_by_channel["annual_revenue"]>0,
+        df_by_channel["revenue_at_risk"]*100/df_by_channel["annual_revenue"].replace(0,np.nan),
+        0.0
+    )
+
+    df_by_tenure=df.groupby("tenure").agg(
+        annual_revenue=("annual_revenue_inr","sum"),
+        revenue_at_risk=("revenue_at_risk","sum")
+    )
+    df_by_tenure["risk_percentage"]=np.where(
+        df_by_tenure["annual_revenue"]>0,
+        df_by_tenure["revenue_at_risk"]*100/df_by_tenure["annual_revenue"].replace(0,np.nan),
+        0.0
+    )
+
+    df_by_nps_class=df.groupby("nps_class").agg(
+        annual_revenue=("annual_revenue_inr","sum"),
+        revenue_at_risk=("revenue_at_risk","sum")
+    )
+    df_by_nps_class["risk_percentage"]=np.where(
+        df_by_nps_class["annual_revenue"]>0,
+        df_by_nps_class["revenue_at_risk"]*100/df_by_nps_class["annual_revenue"].replace(0,np.nan),
+        0.0
+    )
+
+    return {
+        "data_status":True,
+        "total_responses":total_responses,
+        "currency":"INR",
+        "unit":"rupees",
+        "overall":{
+            "annual_revenue":total_revenue,
+            "revenue_at_risk":total_revenue_at_risk,
+            "risk_percentage":total_risk_percentage
+        },
+        "churn_assumptions":CHURN_PROBABILITIES,
+        "by_nps_category":[
+            {
+                "category":str(category),
+                "annual_revenue":round(float(row["annual_revenue"]),2),
+                "revenue_at_risk":round(float(row["revenue_at_risk"]),2),
+                "risk_percentage":round(float(row["risk_percentage"]),2)
+            } for category, row in df_by_nps_class.iterrows()
+        ],
+        "by_product":[
+            {
+                "category":str(category),
+                "customers":int(row["customers"]),
+                "annual_revenue":round(float(row["annual_revenue"]),2),
+                "revenue_at_risk":round(float(row["revenue_at_risk"]),2),
+                "risk_percentage":round(float(row["risk_percentage"]),2)
+            } for category, row in df_by_product.iterrows()
+        ],
+        "by_channel":[
+            {
+                "category":str(category),
+                "annual_revenue":round(float(row["annual_revenue"]),2),
+                "revenue_at_risk":round(float(row["revenue_at_risk"]),2),
+                "risk_percentage":round(float(row["risk_percentage"]),2)
+            } for category, row in df_by_channel.iterrows()
+        ],
+        "by_tenure":[
+            {
+                "category":str(category),
+                "annual_revenue":round(float(row["annual_revenue"]),2),
+                "revenue_at_risk":round(float(row["revenue_at_risk"]),2),
+                "risk_percentage":round(float(row["risk_percentage"]),2)
+            } for category, row in df_by_tenure.iterrows()
+        ],
+        "data_caveats":[
+            "Churn probabilities are assumed, not predicted.",
+            "Revenue at risk is an expected annual loss estimate.",
+            "Financial values are expressed in INR rupees."
+        ]
+    }
 
 
 @tool
-def get_callback_list():
-    pass
+def get_callback_list(top_n:int=10)->dict:
+    """
+    Identify and prioritize detractor customers for follow-up.
+
+    Customers with NPS scores between 0 and 6 are ranked by
+    estimated annual revenue at risk in descending order.
+
+    Args:
+        top_n: Maximum number of callback candidates to return.
+            Defaults to 10.
+
+    Returns:
+        Dictionary containing total eligible candidates,
+        returned candidate count, and a prioritized callback list.
+    """
+    if top_n<=0:
+        raise ValueError("top_n must be a positive number")
+    
+    df=load_survey_data().copy()
+
+    if len(df)<=0:
+        return {
+            "data_status":False,
+            "total_responses":0
+        }
+
+    df["nps_class"]=np.where(
+        df["score"]>=9,
+        "promoter",
+        np.where(df["score"]<=6,"detractor","passive")
+    )
+
+    df["revenue_at_risk"]=df["annual_revenue_inr"]*df["nps_class"].map(CHURN_PROBABILITIES)
+
+    df=df[df["nps_class"]=="detractor"].copy()
+
+    total_candidates=len(df)
+
+    df=df.sort_values(by=["revenue_at_risk"],ascending=[False]).head(top_n).copy()
+
+    return {
+        "data_status": True,
+        "total_candidates": total_candidates,
+        "returned_candidates":len(df),
+        "callback_list": [
+            {
+                "response_id": str(row["response_id"]),
+                "nps_score": int(row["score"]),
+                "product": str(row["product"]),
+                "annual_revenue_inr": int(row["annual_revenue_inr"]),
+                "revenue_at_risk_inr": round(float(row["revenue_at_risk"]),2),
+                "comment": str(row["comment"]) if pd.notna(row["comment"]) else None,
+                "priority": index
+            } for index, (_,row) in enumerate(df.iterrows(),start=1)
+        ] 
+    }
 
 
 @tool
