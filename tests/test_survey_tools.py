@@ -3,7 +3,9 @@ import pytest
 import pandas as pd
 from unittest.mock import patch
 
-from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment, get_revenue_at_risk, get_callback_list
+from types import SimpleNamespace
+
+from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment, get_revenue_at_risk, get_callback_list, find_score_comment_mismatches
 
 
 # Access the underlying Python function
@@ -966,3 +968,215 @@ def test_original_callback_dataframe_unchanged(mock_callback_data):
         get_callbacks()
 
     pd.testing.assert_frame_equal(mock_callback_data, original)
+
+
+
+# ====================================================
+# Tests for find_score_comment_mismatches
+# ====================================================
+
+get_mismatches = find_score_comment_mismatches.__wrapped__ # type: ignore
+
+
+@pytest.fixture
+def mock_mismatch_data():
+    return pd.DataFrame([
+        {
+            "response_id": "R001",
+            "score": 2,
+            "comment": "Excellent banking service!"
+        },
+        {
+            "response_id": "R002",
+            "score": 10,
+            "comment": "Terrible customer support."
+        },
+        {
+            "response_id": "R003",
+            "score": 9,
+            "comment": "Great experience."
+        },
+        {
+            "response_id": "R004",
+            "score": 3,
+            "comment": "Very bad experience."
+        },
+        {
+            "response_id": "R005",
+            "score": 8,
+            "comment": "I visited the branch."
+        },
+        {
+            "response_id": "R006",
+            "score": 6,
+            "comment": "Good app, but slow support."
+        },
+        {
+            "response_id": "R007",
+            "score": 4,
+            "comment": None
+        },
+        {
+            "response_id": "R008",
+            "score": 1,
+            "comment": "   "
+        }
+    ])
+
+
+@pytest.fixture
+def mock_sentiment_classifier(mock_mismatch_data):
+    sentiment_results = {
+        "Excellent banking service!": ("positive", "Strong satisfaction"),
+        "Terrible customer support.": ("negative", "Customer dissatisfaction"),
+        "Great experience.": ("positive", "Positive experience"),
+        "Very bad experience.": ("negative", "Negative experience"),
+        "I visited the branch.": ("neutral", "Factual statement"),
+        "Good app, but slow support.": ("mixed", "Both positive and negative")
+    }
+
+    def fake_classify(comment):
+        sentiment, reason = sentiment_results[comment]
+        return SimpleNamespace(sentiment=sentiment, reason=reason)
+
+    with (
+        patch(
+            "nps_insights_agent.tools.survey_tools.load_survey_data",
+            return_value=mock_mismatch_data
+        ),
+        patch(
+            "nps_insights_agent.tools.survey_tools.classify_sentiment",
+            side_effect=fake_classify
+        )
+    ):
+        yield
+
+
+def test_mismatch_detection(mock_sentiment_classifier):
+    result = get_mismatches()
+
+    assert result["data_status"] is True
+    assert result["total_comments_analyzed"] == 6
+    assert result["total_mismatches"] == 2
+
+    ids = {item["response_id"] for item in result["mismatches"]}
+    assert ids == {"R001", "R002"}
+
+
+def test_mismatch_reasons(mock_sentiment_classifier):
+    result = get_mismatches()
+
+    mismatches = {
+        item["response_id"]: item
+        for item in result["mismatches"]
+    }
+
+    assert mismatches["R001"]["mismatch_reason"] == (
+        "Positive comment with detractor NPS score"
+    )
+    assert mismatches["R002"]["mismatch_reason"] == (
+        "Negative comment with promoter NPS score"
+    )
+
+
+def test_uncertain_comment_count(mock_sentiment_classifier):
+    result = get_mismatches()
+
+    assert result["uncertain_comments"] == 2
+
+
+def test_mismatch_output_structure(mock_sentiment_classifier):
+    result = get_mismatches()
+
+    expected_keys = {
+        "response_id",
+        "score",
+        "comment",
+        "sentiment",
+        "sentiment_reason",
+        "mismatch_reason"
+    }
+
+    for item in result["mismatches"]:
+        assert expected_keys.issubset(item)
+        assert isinstance(item["score"], int)
+        assert isinstance(item["sentiment_reason"], str)
+
+
+def test_mismatch_classifier_called_only_for_valid_comments(
+    mock_mismatch_data
+):
+    with (
+        patch(
+            "nps_insights_agent.tools.survey_tools.load_survey_data",
+            return_value=mock_mismatch_data
+        ),
+        patch(
+            "nps_insights_agent.tools.survey_tools.classify_sentiment",
+            return_value=SimpleNamespace(
+                sentiment="neutral",
+                reason="No clear sentiment"
+            )
+        ) as mocked_classifier
+    ):
+        result = get_mismatches()
+
+    assert result["total_comments_analyzed"] == 6
+    assert mocked_classifier.call_count == 6
+
+
+def test_mismatch_empty_dataset():
+    with patch(
+        "nps_insights_agent.tools.survey_tools.load_survey_data",
+        return_value=pd.DataFrame()
+    ):
+        result = get_mismatches()
+
+    assert result["data_status"] is False
+    assert result["total_comments_analyzed"] == 0
+    assert result["total_mismatches"] == 0
+    assert result["mismatches"] == []
+
+
+def test_mismatch_all_comments_missing():
+    df = pd.DataFrame([
+        {"response_id": "R001", "score": 2, "comment": None},
+        {"response_id": "R002", "score": 10, "comment": "  "}
+    ])
+
+    with (
+        patch(
+            "nps_insights_agent.tools.survey_tools.load_survey_data",
+            return_value=df
+        ),
+        patch(
+            "nps_insights_agent.tools.survey_tools.classify_sentiment"
+        ) as mocked_classifier
+    ):
+        result = get_mismatches()
+
+    assert result["total_comments_analyzed"] == 0
+    assert result["total_mismatches"] == 0
+    assert result["mismatches"] == []
+    mocked_classifier.assert_not_called()
+
+
+def test_mismatch_original_dataframe_unchanged(mock_mismatch_data):
+    original = mock_mismatch_data.copy(deep=True)
+
+    with (
+        patch(
+            "nps_insights_agent.tools.survey_tools.load_survey_data",
+            return_value=mock_mismatch_data
+        ),
+        patch(
+            "nps_insights_agent.tools.survey_tools.classify_sentiment",
+            return_value=SimpleNamespace(
+                sentiment="neutral",
+                reason="No clear sentiment"
+            )
+        )
+    ):
+        get_mismatches()
+
+    pd.testing.assert_frame_equal(mock_mismatch_data, original)
