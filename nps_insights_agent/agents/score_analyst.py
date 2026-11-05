@@ -12,7 +12,7 @@ load_dotenv()
 
 logger=logging.getLogger(__name__)
 
-MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
+MODEL_ID = os.getenv("OPENAI_MODEL_ID", "gpt-6-luna")
 
 SCORE_ANALYST_SYSTEM_PROMPT = """
 You are ScoreAnalystAgent, an expert NPS data analyst
@@ -40,19 +40,19 @@ Rules:
 def create_score_analyst()->Agent:
     model=OpenAIModel(
         client_args={
-                "api_key": os.environ["GROQ_API_KEY"],
-                "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
+                "api_key": os.environ["OPENAI_API_KEY"],
+                "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),  # or a local OpenAI-compatible server
                 "max_retries": 5,  # retry dropped connections (the client default is 2)
             },
             model_id=MODEL_ID,
             # Groq reasoning models stream their thinking by default; hide it so only the answer prints.
-            params={"extra_body": {"include_reasoning": False},
-                    "max_tokens":4000,
-                    "temperature":0
+            params={
+                "reasoning_effort":"none",
+                "max_completion_tokens":1500
         }
     )
 
-    print(f"Using {MODEL_ID} on Groq")
+    print(f"Using {MODEL_ID} on OpenaAI")
     logger.info("Initializing ScoreAnalystAgent with model: %s", MODEL_ID)
 
     return Agent(

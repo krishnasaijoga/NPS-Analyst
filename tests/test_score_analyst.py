@@ -17,7 +17,7 @@ def test_agent_creation():
         ) as mock_agent,
         patch.dict(
             "os.environ",
-            {"GROQ_API_KEY": "test-key"}
+            {"OPENAI_API_KEY": "test-key"}
         ),
     ):
         result = create_score_analyst()
@@ -27,7 +27,7 @@ def test_agent_creation():
         assert result is mock_agent.return_value
 
 
-def test_groq_model_configuration():
+def test_openai_model_configuration():
     with (
         patch(
             "nps_insights_agent.agents.score_analyst.OpenAIModel"
@@ -38,9 +38,9 @@ def test_groq_model_configuration():
         patch.dict(
             "os.environ",
             {
-                "GROQ_API_KEY": "test-key",
-                "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
-                "GROQ_MODEL": "openai/gpt-oss-120b",
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_BASE_URL": "https://api.openai.com/v1",
+                "OPENAI_MODEL": "gpt-6-luna",
             },
         ),
     ):
@@ -48,11 +48,11 @@ def test_groq_model_configuration():
 
         kwargs = mock_model.call_args.kwargs
 
-        assert kwargs["model_id"] == "openai/gpt-oss-120b"
+        assert kwargs["model_id"] == "gpt-6-luna"
         assert kwargs["client_args"]["api_key"] == "test-key"
         assert (
             kwargs["client_args"]["base_url"]
-            == "https://api.groq.com/openai/v1"
+            == "https://api.openai.com/v1"
         )
 
 
@@ -66,7 +66,7 @@ def test_agent_has_correct_tools():
         ) as mock_agent,
         patch.dict(
             "os.environ",
-            {"GROQ_API_KEY": "test-key"},
+            {"OPENAI_API_KEY": "test-key"},
         ),
     ):
         create_score_analyst()

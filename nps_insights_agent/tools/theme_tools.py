@@ -75,7 +75,7 @@ THEMES = {
 
 
 @tool
-def get_comment_themes(month=None,nps_category=None)->dict:
+def get_comment_themes(month:str="",nps_category:str="")->dict:
     """
     Retrieve comment themes for a particular month and nps_category
 
