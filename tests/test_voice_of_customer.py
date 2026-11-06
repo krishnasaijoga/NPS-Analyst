@@ -49,7 +49,7 @@ def test_agent_system_prompt():
     assert "comments" in prompt
 
 
-def test_agent_uses_groq():
+def test_agent_uses_openai():
     with (
         patch(
             "nps_insights_agent.agents.voice_of_customer.OpenAIModel"

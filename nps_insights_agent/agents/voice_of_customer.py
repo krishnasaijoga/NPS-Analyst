@@ -1,7 +1,7 @@
 import logging
 import os
 
-from strands import tool, Agent
+from strands import Agent
 from dotenv import load_dotenv
 
 from strands.models.openai import OpenAIModel
