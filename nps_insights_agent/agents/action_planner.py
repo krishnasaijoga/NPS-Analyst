@@ -84,7 +84,7 @@ def create_action_planner_agent()->Agent:
     )
 
     print(f"Using {MODEL_ID} on OpenAI")
-    logger.info("Initializing ChurnRiskAgent with model: %s", MODEL_ID)
+    logger.info("Initializing ActionPlanner with model: %s", MODEL_ID)
 
     return Agent(
         name="ActionPlannerAgent",
