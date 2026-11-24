@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from strands.models.openai import OpenAIModel
 
 from nps_insights_agent.tools.survey_tools import get_nps_by_segment, get_revenue_at_risk, find_score_comment_mismatches
+from nps_insights_agent.schemas.agent_outputs import ChurnRiskAgentOutput
 
 load_dotenv()
 
@@ -60,7 +61,7 @@ def create_churn_risk_agent()->Agent:
         model_id=MODEL_ID,
         params={
                 "reasoning_effort":"none",
-                "max_completion_tokens":1500
+                "max_completion_tokens":8192
         }
     )
 
@@ -71,5 +72,6 @@ def create_churn_risk_agent()->Agent:
         name="ChurnRiskAgent",
         model=model,
         system_prompt=CHURN_RISK_SYSTEM_PROMPT,
-        tools=[get_nps_by_segment,get_revenue_at_risk,find_score_comment_mismatches]
+        tools=[get_nps_by_segment,get_revenue_at_risk,find_score_comment_mismatches],
+        structured_output_model=ChurnRiskAgentOutput
     )

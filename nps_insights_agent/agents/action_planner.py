@@ -8,6 +8,7 @@ from strands.models.openai import OpenAIModel
 
 from nps_insights_agent.tools.whatif_tools import estimate_fix_impact
 from nps_insights_agent.tools.survey_tools import get_callback_list
+from nps_insights_agent.schemas.agent_outputs import ActionPlannerOutput
 
 load_dotenv()
 
@@ -90,5 +91,6 @@ def create_action_planner_agent()->Agent:
         name="ActionPlannerAgent",
         model=model,
         system_prompt=ACTION_PLANNER_SYSTEM_PROMPT,
-        tools=[estimate_fix_impact,get_callback_list]
+        tools=[estimate_fix_impact,get_callback_list],
+        structured_output_model=ActionPlannerOutput
     )

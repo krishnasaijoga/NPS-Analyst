@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from strands.models.openai import OpenAIModel
 
 from nps_insights_agent.tools.theme_tools import get_comment_themes
+from nps_insights_agent.schemas.agent_outputs import VoiceOfCustomerOutput
 
 load_dotenv()
 
@@ -62,4 +63,5 @@ def create_voice_of_customer()->Agent:
         # callback_handler=None,
         system_prompt=CUSTOMER_VOICE_ANALYST_SYSTEM_PROMPT,
         tools=[get_comment_themes],
+        structured_output_model=VoiceOfCustomerOutput
     )

@@ -31,3 +31,6 @@ Thumbs.db
 
 # html files
 *.html
+
+#workflow cache
+.cache/nps_workflow/

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from strands.models.openai import OpenAIModel
 
 from nps_insights_agent.tools.survey_tools import get_nps_overview, get_nps_by_segment
+from nps_insights_agent.schemas.agent_outputs import ScoreAnalysisOutput
 
 load_dotenv()
 
@@ -61,5 +62,6 @@ def create_score_analyst()->Agent:
         # callback_handler=None,
         system_prompt=SCORE_ANALYST_SYSTEM_PROMPT,
         tools=[get_nps_overview,get_nps_by_segment],
+        structured_output_model=ScoreAnalysisOutput
     )
 
